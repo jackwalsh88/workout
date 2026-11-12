@@ -8,14 +8,22 @@
 <title>Gym Log</title>
 <style>
 :root{
-  --bg:#0e0f12; --card:#181a1f; --line:#2a2d35; --text:#ecedf0; --muted:#9097a3;
-  --accent:#4fb3a9; --accent-ink:#06201d; --up:#7cc96b; --warn:#e0a84f; --down:#e07a6f;
+  --bg:#f4f4f1; --card:#ffffff; --line:#e1e1dc; --text:#1b1c1f; --muted:#666b74;
+  --accent:#1f7f76; --accent-ink:#ffffff; --up:#2f8a3a; --warn:#a96d10; --down:#b2443a;
   --radius:14px;
 }
-@media (prefers-color-scheme: light){
-  :root{ --bg:#f4f4f1; --card:#ffffff; --line:#e1e1dc; --text:#1b1c1f; --muted:#666b74;
-         --accent:#1f7f76; --accent-ink:#ffffff; --up:#2f8a3a; --warn:#a96d10; --down:#b2443a; }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --bg:#0e0f12; --card:#181a1f; --line:#2a2d35; --text:#ecedf0; --muted:#9097a3;
+    --accent:#4fb3a9; --accent-ink:#06201d; --up:#7cc96b; --warn:#e0a84f; --down:#e07a6f; }
 }
+:root[data-theme="dark"]{ --bg:#0e0f12; --card:#181a1f; --line:#2a2d35; --text:#ecedf0; --muted:#9097a3;
+  --accent:#4fb3a9; --accent-ink:#06201d; --up:#7cc96b; --warn:#e0a84f; --down:#e07a6f; }
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
+.modal .box{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;max-width:360px;width:100%}
+.modal .row{margin-top:14px}
+.modal .row button{flex:1}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(76px + env(safe-area-inset-bottom));background:var(--text);color:var(--bg);
+  border-radius:10px;padding:10px 14px;z-index:21;text-align:center;font-size:14px}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);
   font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
@@ -71,7 +79,7 @@ ul.tips{padding-left:18px;margin:6px 0} ul.tips li{margin:4px 0}
 </head>
 <body>
 <header>
-  <div class="row between"><h1>Gym Log</h1><span id="nextHint" class="small muted"></span></div>
+  <div class="row between"><h1>Gym Log</h1><span class="small muted" style="text-align:right"><span id="nextHint"></span><br><span id="sync"></span></span></div>
   <div class="tabs">
     <button data-view="A">A · Mon</button>
     <button data-view="B">B · Thu</button>
@@ -132,7 +140,68 @@ function load(){
   catch(e){ return {history:[], draft:null, cfg:{}}; }
 }
 let S = load();
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+S.history.forEach(s => { if (!s.id) s.id = "s" + new Date(s.date).getTime().toString(36); });
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} }
+
+/* ---------- Cloud sync (claude.ai artifact db; private per signed-in viewer) ----------
+   Browser storage is the fast local copy; the db is the durable copy.
+   Layout: data/users/<uid>/gymlog  = {cfg}
+           data/users/<uid>/gymlog/sessions/<sessionId> = one saved workout */
+let cloud = null; // {profile, sessions}
+const syncEl = () => document.getElementById("sync");
+function syncNote(t){ const el=syncEl(); if(el) el.textContent=t; }
+async function cloudInit(){
+  if (!window.claude || !window.claude.use) { syncNote("Saved on this device only"); return; }
+  syncNote("Connecting…");
+  const timer = setTimeout(()=>syncNote("Cloud not reachable yet — saving on this device"), 10000);
+  try {
+    const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
+    const uid = user && await user.id();
+    if (!db || !uid) { clearTimeout(timer); syncNote("Sign in to claude.ai to sync. Saving on this device only."); return; }
+    const profile = db.doc("data/users/" + uid + "/gymlog");
+    cloud = {profile, sessions: profile.collection("sessions")};
+    const [pSnap, qSnap] = await Promise.all([profile.get(), cloud.sessions.limit(1000).get()]);
+    clearTimeout(timer);
+    const remote = qSnap.docs.map(d => d.data()).filter(Boolean);
+    const remoteIds = new Set(remote.map(s => s.id));
+    const localOnly = S.history.filter(s => !remoteIds.has(s.id));
+    const byId = {}; [...remote, ...S.history].forEach(s => byId[s.id] = s);
+    S.history = Object.values(byId).sort((a,b) => a.date < b.date ? -1 : 1);
+    const remoteCfg = pSnap.exists && pSnap.data() && pSnap.data().cfg;
+    if (remoteCfg) S.cfg = Object.assign({}, S.cfg, remoteCfg);
+    save();
+    for (const s of localOnly) await cloud.sessions.doc(s.id).set(s);
+    if (!remoteCfg && Object.keys(S.cfg).length) await profile.set({cfg:S.cfg});
+    syncNote("Synced ✓");
+    // Cloud history may change today's targets: rebuild an untouched draft.
+    if (!draftStarted()) S.draft = null;
+    show(current==="history"||current==="settings" ? current : (S.draft ? S.draft.workout : nextWorkout()));
+  } catch(e) {
+    clearTimeout(timer);
+    syncNote(e && e.code === "quota_exceeded" ? "Cloud storage full — saving on this device" : "Sync failed — saving on this device");
+  }
+}
+async function cloudWrite(fn){
+  if (!cloud) return;
+  try { await fn(cloud); syncNote("Synced ✓"); }
+  catch(e){ syncNote(e && e.code === "quota_exceeded" ? "Cloud storage full" : "Not synced — kept on this device"); }
+}
+let cfgTimer=null;
+function cloudCfgSoon(){ clearTimeout(cfgTimer); cfgTimer=setTimeout(()=>cloudWrite(c=>c.profile.set({cfg:S.cfg})), 800); }
+
+/* ---------- In-page dialogs (alert/confirm may be blocked in embedded pages) ---------- */
+function ask(msg, yes="OK", no="Cancel"){
+  return new Promise(res=>{
+    const m=document.createElement("div"); m.className="modal";
+    m.innerHTML=`<div class="box"><div></div><div class="row"><button class="ghost" data-a="0"></button><button class="on" data-a="1"></button></div></div>`;
+    m.querySelector(".box > div").textContent=msg;
+    m.querySelector('[data-a="0"]').textContent=no; m.querySelector('[data-a="1"]').textContent=yes;
+    m.addEventListener("click",e=>{ const b=e.target.closest("[data-a]"); if(!b && e.target!==m) return; m.remove(); res(!!b && b.dataset.a==="1"); });
+    document.body.appendChild(m);
+  });
+}
+function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),3000); }
 function cfg(id){ return Object.assign({}, EXERCISES[id], S.cfg[id]||{}); }
 
 /* ---------- Progression (double progression) ----------
@@ -169,10 +238,11 @@ function fmtDate(d){ return new Date(d).toLocaleDateString(undefined,{month:"sho
 function nextWorkout(){ const l=S.history[S.history.length-1]; return l ? (l.workout==="A"?"B":"A") : "A"; }
 
 /* ---------- Draft (in-progress workout survives reloads) ---------- */
-function ensureDraft(w){
+const draftStarted = () => !!S.draft && S.draft.entries.some(e=>e.logged.some(Boolean));
+async function ensureDraft(w){
   if (S.draft && S.draft.workout===w) return S.draft;
-  if (S.draft && S.draft.entries.some(e=>e.logged.some(Boolean)) &&
-      !confirm("A Workout "+S.draft.workout+" is in progress. Discard it and start Workout "+w+"?")) return null;
+  if (draftStarted() &&
+      !(await ask("Workout "+S.draft.workout+" is in progress. Discard it and start Workout "+w+"?","Discard","Keep it"))) return null;
   S.draft={workout:w, started:Date.now(), entries:PROGRAM[w].list.map(id=>{
     const t=target(id);
     return {id, weight:t.weight, reps:Array(SETS).fill(t.reps), logged:Array(SETS).fill(false)};
@@ -184,8 +254,8 @@ function ensureDraft(w){
 const V=document.getElementById("view");
 let current = null;
 
-function show(v){
-  if ((v==="A"||v==="B") && !ensureDraft(v)) v=S.draft.workout;
+async function show(v){
+  if ((v==="A"||v==="B") && !(await ensureDraft(v))) v=S.draft.workout;
   current=v;
   document.querySelectorAll("[data-view]").forEach(b=>b.classList.toggle("on", b.dataset.view===v));
   document.getElementById("nextHint").textContent = "Next up: "+nextWorkout();
@@ -273,7 +343,7 @@ function renderSettings(){
   });
   h+=`</div></div>
   <h2>Backup</h2><div class="card">
-    <p class="small muted" style="margin-top:0">Data lives only in this browser. Export now and then.</p>
+    <p class="small muted" style="margin-top:0">When you are signed in to claude.ai, every saved workout also goes to your private cloud copy. Export is a manual extra backup.</p>
     <div class="row"><button id="exp" style="flex:1">Export</button><button id="imp" style="flex:1">Import</button><button id="rst" style="flex:1" class="ghost">Reset all</button></div>
     <textarea id="io" rows="4" style="width:100%;margin-top:8px" placeholder="Exported data appears here; paste data here to import."></textarea>
   </div>`;
@@ -288,11 +358,19 @@ V.addEventListener("click",e=>{
   const a=b.dataset.act, i=+b.dataset.i, s=+b.dataset.s;
   if (b.id==="finish") return finish();
   if (b.id==="exp"){ const t=document.getElementById("io"); t.value=JSON.stringify({history:S.history,cfg:S.cfg}); t.select(); try{navigator.clipboard.writeText(t.value);}catch(_){} return; }
-  if (b.id==="imp"){ try{ const d=JSON.parse(document.getElementById("io").value); if(!Array.isArray(d.history)) throw 0;
-      S.history=d.history; S.cfg=d.cfg||{}; S.draft=null; save(); alert("Imported "+d.history.length+" sessions."); show(nextWorkout()); }
-    catch(_){ alert("That does not look like exported Gym Log data."); } return; }
-  if (b.id==="rst"){ if(confirm("Delete all history and settings?")){ S={history:[],draft:null,cfg:{}}; save(); show("A"); } return; }
-  if (a==="del"){ if(confirm("Delete this session?")){ S.history.splice(i,1); save(); renderHistory(); } return; }
+  if (b.id==="imp"){ let d; try{ d=JSON.parse(document.getElementById("io").value); if(!Array.isArray(d.history)) throw 0; }
+    catch(_){ toast("That does not look like exported Gym Log data."); return; }
+    d.history.forEach(s=>{ if(!s.id) s.id="s"+new Date(s.date).getTime().toString(36); });
+    const byId={}; [...S.history, ...d.history].forEach(s=>byId[s.id]=s);
+    S.history=Object.values(byId).sort((x,y)=>x.date<y.date?-1:1); S.cfg=Object.assign({}, S.cfg, d.cfg||{}); S.draft=null; save();
+    cloudWrite(async c=>{ for(const s of d.history) await c.sessions.doc(s.id).set(s); await c.profile.set({cfg:S.cfg}); });
+    toast("Imported "+d.history.length+" sessions."); show("history"); return; }
+  if (b.id==="rst"){ ask("Delete all history and settings, here and in the cloud?","Delete all").then(ok=>{ if(!ok) return;
+      const old=S.history; S={history:[],draft:null,cfg:{}}; save();
+      cloudWrite(async c=>{ for(const s of old) await c.sessions.doc(s.id).delete(); await c.profile.set({cfg:{}}); });
+      show("A"); }); return; }
+  if (a==="del"){ ask("Delete this session?","Delete").then(ok=>{ if(!ok) return;
+      const [s]=S.history.splice(i,1); save(); cloudWrite(c=>c.sessions.doc(s.id).delete()); renderHistory(); }); return; }
   if (!S.draft) return;
   const en=S.draft.entries[i], c=en&&cfg(en.id);
   if (a==="w+"||a==="w-"){ en.weight=Math.max(0,(+en.weight||0)+(a==="w+"?c.inc:-c.inc)); }
@@ -305,21 +383,23 @@ V.addEventListener("click",e=>{
 V.addEventListener("change",e=>{
   const t=e.target;
   if (t.dataset.act==="w"){ S.draft.entries[+t.dataset.i].weight = t.value===""?null:+t.value; save(); }
-  if (t.dataset.cfg){ const id=t.dataset.id; S.cfg[id]=S.cfg[id]||{}; S.cfg[id][t.dataset.cfg]= t.value===""?null:+t.value; save(); }
+  if (t.dataset.cfg){ const id=t.dataset.id; S.cfg[id]=S.cfg[id]||{}; S.cfg[id][t.dataset.cfg]= t.value===""?null:+t.value; save(); cloudCfgSoon(); }
 });
 
-function finish(){
+async function finish(){
   const d=S.draft;
   const entries=d.entries.map(e=>({id:e.id, weight:+e.weight||0, reps:e.reps.filter((_,s)=>e.logged[s])}))
                           .filter(e=>e.reps.length);
-  if (!entries.length){ alert("No sets are marked ✓ yet."); return; }
-  if (d.entries.some(e=>e.logged.some(Boolean) && !(+e.weight)) && !confirm("Some logged exercises have no weight. Save anyway?")) return;
+  if (!entries.length){ toast("No sets are marked ✓ yet."); return; }
+  if (d.entries.some(e=>e.logged.some(Boolean) && !(+e.weight)) && !(await ask("Some logged exercises have no weight. Save anyway?","Save"))) return;
   // Merge duplicate exercises in one session (e.g. Seated Row twice in B): keep the heavier/better one for progression.
   const merged={}; entries.forEach(e=>{ const m=merged[e.id];
     if(!m || e.weight>m.weight || (e.weight===m.weight && Math.min(...e.reps)>Math.min(...m.reps))) merged[e.id]=e; });
-  S.history.push({date:new Date().toISOString(), workout:d.workout, entries:Object.values(merged)});
+  const session={id:newId(), date:new Date().toISOString(), workout:d.workout, entries:Object.values(merged)};
+  S.history.push(session);
   S.draft=null; save(); stopRest();
-  alert("Saved. Next time: Workout "+nextWorkout()+".");
+  cloudWrite(c=>c.sessions.doc(session.id).set(session));
+  toast("Saved. Next time: Workout "+nextWorkout()+".");
   show("history");
 }
 
@@ -340,6 +420,7 @@ document.querySelector(".timer").addEventListener("click",e=>{
 });
 
 show(S.draft ? S.draft.workout : nextWorkout());
+(function waitForClaude(n){ if (window.claude && window.claude.use) cloudInit(); else if (n>0) setTimeout(()=>waitForClaude(n-1),200); else cloudInit(); })(15);
 </script>
 </body>
 </html>
