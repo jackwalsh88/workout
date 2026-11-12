@@ -223,12 +223,21 @@ function target(id){
   const reps=last.reps, lo=Math.min(...reps);
   if (reps.length>=SETS && reps.every(r=>r>=c.max))
     return {weight:last.weight+c.inc, reps:c.min, note:"Hit "+c.max+" on every set last time → weight up.", kind:"up"};
-  if (lo>=c.min)
-    return {weight:last.weight, reps:Math.min(c.max, lo+1), note:"Same weight. Beat last time: aim for "+Math.min(c.max, lo+1)+"+ on every set.", kind:"same"};
   const prev=past[1];
-  if (prev && prev.weight===last.weight && Math.min(...prev.reps)<c.min)
+  if (lo<c.min && prev && prev.weight===last.weight && Math.min(...prev.reps)<c.min)
     return {weight:roundTo(last.weight*0.9, c.inc), reps:c.min, note:"Below "+c.min+" reps twice → lighter, rebuild.", kind:"down"};
-  return {weight:last.weight, reps:c.min, note:"Same weight. Aim for "+c.min+" on every set.", kind:"warn"};
+  // Rep-by-rep: beat last time by one rep, added to the earliest set that lags behind (set 1 if all equal).
+  const plan=nextReps(reps, c);
+  return {weight:last.weight, reps:plan.reps, note:`Same weight. Beat last time by 1+ rep — add it on set ${plan.set+1}.`, kind: lo>=c.min ? "same" : "warn"};
+}
+function nextReps(last, c){
+  const r=Array.from({length:SETS},(_,s)=> s<last.length ? last[s] : last[last.length-1]);
+  const top=Math.max(...r);
+  let i=r.findIndex(x=>x<top);       // first set behind the best set
+  if (i<0) i=0;                      // all equal → add to set 1
+  if (r[i]>=c.max) i=r.findIndex(x=>x<c.max);
+  r[i]=Math.min(c.max, r[i]+1);
+  return {reps:r, set:i};
 }
 function lastText(id){
   const l=entriesFor(id)[0];
@@ -245,7 +254,7 @@ async function ensureDraft(w){
       !(await ask("Workout "+S.draft.workout+" is in progress. Discard it and start Workout "+w+"?","Discard","Keep it"))) return null;
   S.draft={workout:w, started:Date.now(), entries:PROGRAM[w].list.map(id=>{
     const t=target(id);
-    return {id, weight:t.weight, reps:Array(SETS).fill(t.reps), logged:Array(SETS).fill(false)};
+    return {id, weight:t.weight, reps:Array.isArray(t.reps) ? t.reps.slice() : Array(SETS).fill(t.reps), logged:Array(SETS).fill(false)};
   })};
   save(); return S.draft;
 }
@@ -330,6 +339,7 @@ function renderSettings(){
   let h=`<h2 style="margin-top:0">Plan</h2>
   <div class="card small"><b>How progression works</b><ul class="tips">
     <li>Stay at a weight until you hit the top of the rep range on all 3 sets.</li>
+    <li>Each session, beat last time by 1 rep, earliest set first: 8,8,8 → 9,8,8 → 9,9,8 → 9,9,9.</li>
     <li>Then the app adds one increment and drops you to the bottom of the range.</li>
     <li>Last 1–2 reps of each set should be hard, but with clean form.</li>
     <li>Alternate A and B with at least a day between. Two or three sessions per week.</li></ul></div>
