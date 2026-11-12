@@ -90,27 +90,27 @@ ul.tips{padding-left:18px;margin:6px 0} ul.tips li{margin:4px 0}
 
 <script>
 /* ---------- Program definition ---------- */
-// start = last known weight from the old log (null = new machine, enter on first visit).
+// start = ~75% of the old log (return after a 2-month break) (null = new machine, enter on first visit).
 const EXERCISES = {
-  legpress:  {name:"Seated Leg Press",       min:8,  max:12, inc:10, start:130, tags:["quads","glutes"],
+  legpress:  {name:"Seated Leg Press",       min:8,  max:12, inc:10, start:100, tags:["quads","glutes"],
               cue:"Feet shoulder-width, low back flat on the pad. Do not lock knees at the top."},
-  row:       {name:"Seated Row",             min:8,  max:12, inc:5,  start:115, tags:["upper back","lats"], posture:true,
+  row:       {name:"Seated Row",             min:8,  max:12, inc:5,  start:85,  tags:["upper back","lats"], posture:true,
               cue:"Chest tall, pull elbows back, squeeze shoulder blades together and down for 1 second."},
-  chest:     {name:"Chest Press",            min:8,  max:12, inc:5,  start:100, tags:["chest","triceps"],
+  chest:     {name:"Chest Press",            min:8,  max:12, inc:5,  start:75,  tags:["chest","triceps"],
               cue:"Shoulder blades pinned back against the pad. Do not let shoulders roll forward."},
-  pulldown:  {name:"Lat Pulldown",           min:8,  max:12, inc:5,  start:85,  tags:["lats","biceps"], posture:true,
+  pulldown:  {name:"Lat Pulldown",           min:8,  max:12, inc:5,  start:65,  tags:["lats","biceps"], posture:true,
               cue:"Pull bar to upper chest, lead with elbows, chest up. No leaning far back."},
   reardelt:  {name:"Rear Delt (Pec Fly machine, reversed)", min:12, max:15, inc:5, start:null, tags:["rear delts","mid traps"], posture:true,
               cue:"Face the pad, arms straight-ish, sweep back until in line with shoulders. Light weight, slow."},
-  legcurl:   {name:"Leg Curl (seated or lying)", min:8, max:12, inc:5, start:85, tags:["hamstrings"],
+  legcurl:   {name:"Leg Curl (seated or lying)", min:8, max:12, inc:5, start:65, tags:["hamstrings"],
               cue:"Hips stay down. Control the return — 2–3 seconds."},
-  crunch:    {name:"Abdominal Crunch",       min:12, max:15, inc:5,  start:55,  tags:["abs"], posture:true,
+  crunch:    {name:"Abdominal Crunch",       min:12, max:15, inc:5,  start:40,  tags:["abs"], posture:true,
               cue:"Curl ribs toward hips; do not pull with the arms."},
-  biceps:    {name:"Biceps Curl",            min:10, max:12, inc:5,  start:25,  tags:["biceps"],
+  biceps:    {name:"Biceps Curl",            min:10, max:12, inc:5,  start:20,  tags:["biceps"],
               cue:"Elbows fixed on the pad. Full stretch at the bottom."},
   glute:     {name:"Glute Machine",          min:10, max:15, inc:5,  start:null, tags:["glutes"], posture:true,
               cue:"Squeeze the glute at the top; do not arch the low back to get extra range."},
-  shoulder:  {name:"Shoulder Press",         min:8,  max:12, inc:5,  start:25,  tags:["shoulders","triceps"],
+  shoulder:  {name:"Shoulder Press",         min:8,  max:12, inc:5,  start:20,  tags:["shoulders","triceps"],
               cue:"Ribs down, back on the pad. Stop just short of lockout."},
   legext:    {name:"Leg Extension",          min:8,  max:12, inc:5,  start:null, tags:["quads"],
               cue:"Pause 1 second at the top. Lower slowly."},
@@ -150,7 +150,7 @@ function entriesFor(id){
 function roundTo(w, inc){ return Math.max(0, Math.round(w/inc)*inc); }
 function target(id){
   const c=cfg(id), past=entriesFor(id), last=past[0];
-  if (!last) return {weight:c.start, reps:c.min, note: c.start==null ? "New machine — pick a weight you can do "+c.min+"× with 2 reps to spare." : "Starting point from your old log.", kind:"new"};
+  if (!last) return {weight:c.start, reps:c.min, note: c.start==null ? "New machine — pick a weight you can do "+c.min+"× with 2 reps to spare." : "Restart weight (~75% of your old log). If it feels easy, the app will move you up fast.", kind:"new"};
   const reps=last.reps, lo=Math.min(...reps);
   if (reps.length>=SETS && reps.every(r=>r>=c.max))
     return {weight:last.weight+c.inc, reps:c.min, note:"Hit "+c.max+" on every set last time → weight up.", kind:"up"};
